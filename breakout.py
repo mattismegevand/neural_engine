@@ -2,84 +2,125 @@
 
 import os
 import re
+import sys
+import json
 from anthropic import Anthropic
 
+WIDTH = 9
+HEIGHT = 11
+INPUTS = { 'a': 'LEFT', 'd': 'RIGHT', '': 'NONE' }
+
 prompt = """
-You are a Breakout game engine. Process the game state and user input to generate the next state.
+You are acting as a game engine for a Breakout-style game. Your task is to process the current game state and player input, then return the updated game state. Follow these instructions carefully:
 
-Game state format:
-ball_x,ball_y|ball_dx,ball_dy|paddle_x|bricks|score|lives
+1. Game Rules and Mechanics:
+- The game consists of a paddle, a ball, and bricks.
+- The paddle moves horizontally at the bottom of the screen.
+- The ball bounces off the paddle, walls, and bricks.
+- When the ball hits a brick, the brick is destroyed.
+- If the ball goes below the paddle, the player loses a life.
+- The game ends when all bricks are destroyed or the player runs out of lives.
+- Size of the grid is 9 by 11, (0, 0) being the lower left corner and (8, 10) being the top right corner.
+- Bricks are located at the top of the grid row 10.
+- In case user try to move paddle beyond screen width paddle[x][0] <= 0 or paddle[x][-1] >= 9, paddle will not move.
 
-Where:
-- ball_x and ball_y are the ball's coordinates (integers from 0 to 9)
-- ball_dx and ball_dy are the ball's velocity components (integers: -1, 0, or 1)
-- paddle_x is the paddle's left edge x-coordinate (integer from 1 to 8)
-- bricks is a string of 9 '0's and '1's representing destroyed and present bricks respectively
-- score and lives are integers
-- the game area is 10 units wide (0 to 9) and 10 units high (0 to 9)
-- the paddle is 3 units wide and represented by 'P'
-- the ball is represented by a 'o'
-- there is one row of 9 bricks at the top of the game area (y=0) bricks are '1'
-- (0,0) is top-left (10,9) is bottom-right
+2. Interpreting the Game State:
+You will receive the current game state in the following format:
+<game_state>
+{{GAME_STATE}}
+</game_state>
 
-Example:
-Input: 5,7|0,-1|5|111111111|0|3
-User input: d
+The game state includes:
+- Paddle position (x-coordinate)
+- Ball position (x and y coordinates)
+- Ball velocity (dx and dy)
+- Brick layout (a grid of 0s and 1s, where 1 represents an intact brick)
+- Score
+- Lives remaining
 
-Output:
-5,6|0,-1|5|111111111|0|3
-┌──────────┐
-│1111111111│
-│          │
-│          │
-│          │
-│          │
-│          │
-│    o     │
-│          │
-│   PPP    │
-└──────────┘
+3. Processing Player Input:
+You will receive the player's input in the following format:
+<player_input>
+{{PLAYER_INPUT}}
+</player_input>
 
-Current game state:
+The player input will be one of:
+- "LEFT": Move the paddle left
+- "RIGHT": Move the paddle right
+- "NONE": No movement
+
+4. Updating the Game State:
+Based on the current game state and player input, update the game state as follows:
+a) Move the paddle according to the player input.
+b) Update the ball position based on its velocity.
+c) Check for collisions:
+   - If the ball hits a wall, reverse its x-velocity.
+   - If the ball hits the ceiling, reverse its y-velocity.
+   - If the ball hits the paddle, reverse its y-velocity and adjust x-velocity based on where it hit the paddle.
+   - If the ball hits a brick, destroy the brick, increase the score, and reverse the ball's y-velocity.
+d) If the ball goes below the paddle, decrease lives by 1.
+e) Check if the game has ended (all bricks destroyed or no lives left).
+
+5. Outputting the New Game State:
+Provide the updated game state in the same format as the input, enclosed in <new_game_state> tags. Include a brief explanation of what changed in the game state, enclosed in <explanation> tags.
+
+Remember to process the game mechanics step-by-step and ensure that all aspects of the game state are updated correctly. If you're unsure about any calculations or need to break down complex logic, use <thinking> tags to show your reasoning before providing the final output.
 """
 
-def get_prompt(b_pos, b_d, p_x, bricks, score, lives):
-    return f"{prompt}{b_pos[0]},{b_pos[1]}|{b_d[0]},{b_d[1]}|{p_x}|{bricks}|{score}|{lives}\nFOLLOW EXAMPLE FORMAT!!!"
+def get_prompt(state, player_input):
+    return f"{prompt}\n<game_state>\n{json.dumps(state)}\n</game_state>\n<player_input>\n{player_input}\n</player_input>"
 
-def parse_response(response):
-    state_regex = r"(\d+),(\d+)\|(-?\d+),(-?\d+)\|(\d+)\|([01]{9})\|(\d+)\|(\d+)"
-    match = re.search(state_regex, response)
-    if match:
-        ball_x, ball_y, ball_dx, ball_dy, paddle_x, bricks, score, lives = match.groups()
-        return (int(ball_x), int(ball_y)), (int(ball_dx), int(ball_dy)), int(paddle_x), bricks, int(score), int(lives)
-    return None
+def parse_state(response):
+    match = re.search(r"<new_game_state>(.*?)</new_game_state>", response, re.DOTALL)
+    json_state = match.group(1).strip()
+    return json.loads(json_state)
 
-def render_game(response):
-    game_area = re.search(r"┌.*┘", response, re.DOTALL).group(0)
-    print(game_area)
+def render(state):
+    grid = [[' ' for _ in range(WIDTH)] for _ in range(HEIGHT)]
+    for y, row in enumerate(state['bricks']):
+        for x, brick in enumerate(row):
+            if brick == 1:
+                grid[HEIGHT - y - 1][x] = '#'
+    for x in state['paddle']['x']:
+        grid[1][x] = '='
+    ball = state['ball']
+    grid[ball['y']][ball['x']] = 'O'
+
+    print(f"Score: {state['score']} Lives: {state['lives']}")
+    print(f"+{'-' * WIDTH}+")
+    for row in grid[::-1]:
+        print(f"|{''.join(row)}|")
+    print(f"+{'-' * WIDTH}+")
 
 def main():
+    verbose = sys.argv[1].lower() in ["-v", "--verbose"] if len(sys.argv) > 1 else False
     client = Anthropic()
-    b_pos = (5, 7)
-    b_d = (0, -1)
-    p_x = 5
-    bricks = "1" * 9
-    score = 0
-    lives = 3
+    state = {
+        "paddle": {"x": [3, 4, 5]},
+        "ball": {"x": 4, "y": 2, "dx": 0, "dy": 1},
+        "bricks": [
+            [1, 1, 1, 1, 1, 1, 1, 1, 1],
+        ],
+        "score": 0,
+        "lives": 3,
+    }
 
-    prompt = get_prompt(b_pos, b_d, p_x, bricks, score, lives)
-    os.system('cls' if os.name == 'nt' else 'clear')
-    print("Game:")
-    render_game(prompt)
-    while lives > 0:
+    while state['lives'] > 0:
+        if verbose:
+            print(response)
+        else:
+            os.system('cls' if os.name == 'nt' else 'clear')
+
+        print("Game:")
+        render(state)
+
         while (user_input := input("Enter move ('a'=left, 'd'=right, ''=no movement): ").strip()) not in ["a", "d", ""]:
             print("Invalid input, please enter 'a' or 'd' or ''")
 
-        prompt += f"\nUser input: '{user_input}'\nOutput:"
-
+        prompt = get_prompt(state, INPUTS[user_input])
         message = client.messages.create(
             max_tokens=2048,
-            temperature=0.7,
+            temperature=0.0,
             messages=[{
                 "role": "user",
                 "content": prompt,
@@ -88,16 +129,18 @@ def main():
         )
 
         response = message.content[0].text
+        if verbose:
+            print(response)
+        new_state = parse_state(response)
 
-        parsed_state = parse_response(response)
-        if parsed_state:
-            b_pos, b_d, p_x, bricks, score, lives = parsed_state
-            os.system('cls' if os.name == 'nt' else 'clear')
-            render_game(response)
-            prompt = get_prompt(b_pos, b_d, p_x, bricks, score, lives)
+        if new_state:
+            state = new_state
         else:
-            print("Error parsing response. Exiting game.")
+            print("Error updating game state. Exiting game.")
             break
+
+    print("Game Over!")
+    print(f"Final Score: {state['score']}")
 
 if __name__ == "__main__":
     main()
