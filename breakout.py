@@ -93,9 +93,36 @@ def render(state):
         print(f"│{''.join(row)}│")
     print(f"└{'─' * WIDTH}┘")
 
+# TODO: fix this shit
+def llm_render(client, state):
+    render_prompt = f"""Given the following game state for a Breakout-style game, provide a text-based ASCII art representation of the game board:
+
+Use the following guidelines:
+- The game board is {WIDTH} characters wide and {HEIGHT} characters tall.
+- Use '█' for bricks, '▀' for the paddle, and '●' for the ball.
+- Include the score and lives at the top.
+- Use a border around the game board.
+- Be creative with your representation while keeping it clear and readable.
+
+Game state:
+{json.dumps(state)}
+
+Rendered game:"""
+    message = client.messages.create(
+        max_tokens=1024,
+        messages=[{
+            "role": "user",
+            "content": render_prompt,
+        }],
+        model="claude-3-5-sonnet-20240620",
+    )
+    print(message.content[0].text)
+
 def main():
     parser = argparse.ArgumentParser(description='Breakout game engine')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose mode')
+    parser.add_argument('-v', '--verbose', action=argparse.BooleanOptionalAction, help='Enable verbose mode')
+    parser.add_argument('--llm-render', action=argparse.BooleanOptionalAction, help='Use LLM for rendering')
+    parser.add_argument('--clear', action=argparse.BooleanOptionalAction, help='Clear the screen after each frame')
     args = parser.parse_args()
 
     client = Anthropic()
@@ -108,12 +135,15 @@ def main():
     }
     response = None
     while state['lives'] > 0 and state['bricks']:
-        os.system('cls' if os.name == 'nt' else 'clear')
+        if args.clear:
+            os.system('cls' if os.name == 'nt' else 'clear')
         if args.verbose and response:
             print(response + "\n")
-
-        print("Game:")
-        render(state)
+        
+        if args.llm_render:
+            llm_render(client, state)
+        else:
+            render(state)
 
         while (user_input := input("Enter move ('a'=left, 'd'=right, ''=no movement): ").strip()) not in ["a", "d", ""]:
             print("Invalid input, please enter 'a' or 'd' or ''")

@@ -10,6 +10,7 @@ from anthropic import Anthropic
 WIDTH = 20
 HEIGHT = 15
 INPUTS = {'w': 'UP', 's': 'DOWN', 'a': 'LEFT', 'd': 'RIGHT', '': 'NONE'}
+FRAME = 0
 
 prompt = """You are a simple game engine for a Snake game. Process the current game state and player input, then return the updated game state. Follow these rules:
 
@@ -52,6 +53,31 @@ def parse_state(response):
         return json.loads(json_state)
     return None
 
+def llm_render(client, state):
+    render_prompt = f"""Render the current state of a Snake game as a simple ASCII grid. Use these rules:
+1. The grid is {WIDTH} characters wide and {HEIGHT} characters tall.
+2. Use '■' for snake body segments, '●' for the snake's head, and '★' for the food.
+3. Use ' ' (space) for empty cells.
+4. Add a single-line border around the grid using '─', '│', '┌', '┐', '└', '┘'.
+5. Show the score above the grid.
+6. Do not add any explanations or comments, just output the rendered game.
+
+Game state:
+{json.dumps(state)}
+
+Rendered game:"""
+    message = client.messages.create(
+        max_tokens=1024,
+        messages=[{
+            "role": "user",
+            "content": render_prompt,
+        }],
+        model="claude-3-5-sonnet-20240620",
+    )
+    rendered_game = message.content[0].text.strip()
+    print(f"FRAME {FRAME}")
+    print(rendered_game)
+
 def render(state):
     grid = [[' ' for _ in range(WIDTH)] for _ in range(HEIGHT)]
     
@@ -73,7 +99,9 @@ def render(state):
 
 def main():
     parser = argparse.ArgumentParser(description='Snake game engine')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose mode')
+    parser.add_argument('-v', '--verbose', action=argparse.BooleanOptionalAction, help='Enable verbose mode')
+    parser.add_argument('--llm-render', action=argparse.BooleanOptionalAction, help='Use LLM for rendering')
+    parser.add_argument('--clear', action=argparse.BooleanOptionalAction, help='Clear the screen after each frame')
     args = parser.parse_args()
 
     client = Anthropic()
@@ -86,12 +114,15 @@ def main():
     response = None
 
     while not state.get('game_over', False):
-        os.system('cls' if os.name == 'nt' else 'clear')
+        if args.clear:
+            os.system('cls' if os.name == 'nt' else 'clear')
         if args.verbose and response:
             print(response + "\n")
 
-        print("Game:")
-        render(state)
+        if args.llm_render:
+            llm_render(client, state)
+        else:
+            render(state)
 
         while (user_input := input("Enter move ('w'=up, 's'=down, 'a'=left, 'd'=right, ''=no change): ").strip()) not in ["w", "s", "a", "d", ""]:
             print("Invalid input, please enter 'w', 's', 'a', 'd' or ''")
@@ -107,9 +138,7 @@ def main():
         )
 
         response = message.content[0].text
-        if (state := parse_state(response)):
-            game_over = state.get('game_over', False)
-        else:
+        if not (state := parse_state(response)):
             print("Error updating game state. Exiting game.")
             break
 
