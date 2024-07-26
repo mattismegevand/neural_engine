@@ -4,168 +4,128 @@ import os
 import re
 import json
 import argparse
+
 from anthropic import Anthropic
-from functools import partial
 
-WIDTH = 9
-HEIGHT = 11
-INPUTS = { 'a': 'LEFT', 'd': 'RIGHT', '': 'NONE' }
+WIDTH = 30
+HEIGHT = 20
+INPUTS = {'a': 'LEFT', 'd': 'RIGHT', '': 'NONE'}
 
-prompt = """You are acting as a game engine for a Breakout-style game. Your task is to process the current game state and player input, then return the updated game state. Follow these instructions carefully:
+prompt = """You are a simple game engine for a Breakout-style game. Process the current game state and player input, then return the updated game state. Follow these rules:
 
-1. Game Rules and Mechanics:
-- The game consists of a paddle, a ball, and bricks.
-- The paddle moves horizontally at the bottom of the screen.
-- The ball bounces off the paddle, walls, and bricks.
-- When the ball hits a brick, the brick is destroyed.
-- If the ball goes below the paddle, the player loses a life.
-- The game ends when all bricks are destroyed or the player runs out of lives.
-- Size of the grid is 9 by 11, (0, 0) being the lower left corner and (8, 10) being the top right corner.
-- Bricks are located at the top of the grid row 10.
-- In case user try to move paddle beyond screen width paddle[x][0] <= 0 or paddle[x][-1] >= 9, paddle will not move.
+1. Game Elements:
+   - Paddle: Moves horizontally at the bottom of the screen.
+   - Ball: Moves in straight lines, bouncing off walls, paddle, and bricks.
+   - Bricks: Arranged at the top of the screen in multiple rows, destroyed when hit by the ball.
 
-2. Interpreting the Game State:
-You will receive the current game state in the following format:
-<game_state>
-{{GAME_STATE}}
-</game_state>
+2. Game Rules:
+   - The ball moves in a straight line until it hits something.
+   - When the ball hits a brick:
+     * The brick is destroyed and removed from the game.
+     * The ball immediately bounces off the brick (reverses its direction).
+     * The score increases.
+   - The ball bounces off walls and the paddle.
+   - If the ball goes below the paddle, the player loses a life.
+   - The game ends when all bricks are destroyed or the player runs out of lives.
 
-The game state includes:
-- Paddle position (x-coordinate)
-- Ball position (x and y coordinates)
-- Ball velocity (dx and dy)
-- Brick layout (a grid of 0s and 1s, where 1 represents an intact brick)
-- Score
-- Lives remaining
+3. Simplifications:
+   - Use integer positions for all elements.
+   - The ball always moves at a 45-degree angle (dx and dy are always +1 or -1).
+   - The paddle moves 2 units left or right based on input.
 
-3. Processing Player Input:
-You will receive the player's input in the following format:
-<player_input>
-{{PLAYER_INPUT}}
-</player_input>
+4. Collision Detection:
+   - Check for collisions in this order: walls, paddle, bricks.
+   - If a collision occurs, update the ball's direction immediately before moving to its new position.
 
-The player input will be one of:
-- "LEFT": Move the paddle left
-- "RIGHT": Move the paddle right
-- "NONE": No movement
+5. Input:
+   You will receive the current game state in JSON format and the player input (LEFT, RIGHT, or NONE).
 
-4. Updating the Game State:
-Based on the current game state and player input, update the game state as follows:
-a) Move the paddle according to the player input.
-b) Check for collisions:
-   - If the ball hits a wall, reverse its x-velocity.
-   - If the ball hits the ceiling, reverse its y-velocity.
-   - If the ball hits the paddle, reverse its y-velocity and adjust x-velocity based on where it hit the paddle:
-     * If it hits the left third of the paddle, set dx to -1
-     * If it hits the middle third, keep the current dx
-     * If it hits the right third, set dx to 1
-   - If the ball hits a brick, destroy the brick, increase the score, and reverse the ball's y-velocity.
-c) Update the ball position based on its velocity.
-d) If the ball goes below the paddle, decrease lives by 1.
-e) Check if the game has ended (all bricks destroyed or no lives left).
+6. Output:
+   Provide the updated game state in the same JSON format, enclosed in <new_game_state> tags.
 
-5. Outputting the New Game State:
-Provide the updated game state in the same format as the input, enclosed in <new_game_state> tags. Include a brief explanation of what changed in the game state, enclosed in <explanation> tags.
-
-Remember to process the game mechanics step-by-step and ensure that all aspects of the game state are updated correctly. If you're unsure about any calculations or need to break down complex logic, use <thinking> tags to show your reasoning before providing the final output."""
+Process the game tick as follows:
+1. Move the paddle based on input.
+2. Check for ball collisions and update its direction if necessary.
+3. Move the ball to its new position.
+4. Update the game state (remove destroyed bricks, update score, check for lost life).
+5. Return the new game state."""
 
 def get_prompt(state, player_input):
     return f"{prompt}\n<game_state>\n{json.dumps(state)}\n</game_state>\n<player_input>\n{player_input}\n</player_input>"
 
 def parse_state(response):
     match = re.search(r"<new_game_state>(.*?)</new_game_state>", response, re.DOTALL)
-    json_state = match.group(1).strip()
-    return json.loads(json_state)
+    if match:
+        json_state = match.group(1).strip()
+        return json.loads(json_state)
+    return None
 
 def render(state):
     grid = [[' ' for _ in range(WIDTH)] for _ in range(HEIGHT)]
-    for y, row in enumerate(state['bricks']):
-        for x, brick in enumerate(row):
-            if brick == 1:
-                grid[HEIGHT - y - 1][x] = '#'
-    for x in state['paddle']['x']:
-        grid[1][x] = '='
+    colors = '██▓▒░'
+    for brick in state['bricks']:
+        x, y = brick['x'], brick['y']
+        grid[y][x] = colors[(x + y) % len(colors)]
+    
+    paddle = state['paddle']
+    for x in range(paddle['x'], paddle['x'] + paddle['width']):
+        grid[paddle['y']][x] = '▀'
+    
     ball = state['ball']
-    bx, by, dx, dy = ball['x'], ball['y'], ball['dx'], ball['dy']
-    grid[by][bx] = 'O'
-    if 0 <= by+dy < HEIGHT and 0 <= bx+dx < WIDTH:
-        grid[by+dy][bx+dx] = '.'
-
+    grid[ball['y']][ball['x']] = '●'
+    
+    # Add direction indicator
+    dx, dy = ball['dx'], ball['dy']
+    indicator_x, indicator_y = ball['x'] + dx, ball['y'] + dy
+    if 0 <= indicator_x < WIDTH and 0 <= indicator_y < HEIGHT and grid[indicator_y][indicator_x] == ' ':
+        if dx > 0 and dy > 0:
+            grid[indicator_y][indicator_x] = '↗'
+        elif dx > 0 and dy < 0:
+            grid[indicator_y][indicator_x] = '↘'
+        elif dx < 0 and dy > 0:
+            grid[indicator_y][indicator_x] = '↖'
+        else:
+            grid[indicator_y][indicator_x] = '↙'
+    
     print(f"Score: {state['score']} Lives: {state['lives']}")
-    print(f"+{'-' * WIDTH}+")
+    print(f"┌{'─' * WIDTH}┐")
     for row in grid[::-1]:
-        print(f"|{''.join(row)}|")
-    print(f"+{'-' * WIDTH}+")
-
-def llm_render(client, state):
-    render_prompt = f"""Given the following game state for a Breakout-style game, create an ASCII representation of the game board:
-
-Game State:
-{json.dumps(state, indent=2)}
-
-Rules for ASCII representation:
-- Use a 9x11 grid (WIDTH x HEIGHT)
-- Represent bricks with '#'
-- Represent the paddle with '='
-- Represent the ball with 'O'
-- Use empty spaces for empty cells
-- Show the score and lives at the top
-- Enclose the grid with '+' and '-' characters
-
-Please provide only the ASCII representation without any additional explanation."""
-
-    message = client.messages.create(
-        max_tokens=1024,
-        temperature=0.0,
-        messages=[{
-            "role": "user",
-            "content": render_prompt,
-        }],
-        model="claude-3-opus-20240229",
-    )
-
-    ascii_representation = message.content[0].text.strip()
-    print(ascii_representation)
+        print(f"│{''.join(row)}│")
+    print(f"└{'─' * WIDTH}┘")
 
 def main():
     parser = argparse.ArgumentParser(description='Breakout game engine')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose mode')
-    parser.add_argument('-r', '--render', choices=['render', 'llm_render'], default='render', help='Choose the rendering method')
-    parser.add_argument('-t', '--temperature', type=float, default=0.0, help='Set the temperature for text generation')
     args = parser.parse_args()
 
     client = Anthropic()
-    render_func = render if args.render == 'render' else partial(llm_render, client=client)
     state = {
-        "paddle": {"x": [3, 4, 5]},
-        "ball": {"x": 4, "y": 2, "dx": 1, "dy": 1},
-        "bricks": [
-            [1, 1, 1, 1, 1, 1, 1, 1, 1],
-        ],
+        "paddle": {"x": 11, "y": 1, "width": 8},
+        "ball": {"x": 15, "y": 13, "dx": 1, "dy": 1},
+        "bricks": [{"x": x, "y": y} for y in range(16, 20) for x in range(0, 30, 2)],
         "score": 0,
         "lives": 3,
     }
     response = None
-    while state['lives'] > 0:
+    while state['lives'] > 0 and state['bricks']:
         os.system('cls' if os.name == 'nt' else 'clear')
         if args.verbose and response:
             print(response + "\n")
 
         print("Game:")
-        render_func(state=state)
+        render(state)
 
         while (user_input := input("Enter move ('a'=left, 'd'=right, ''=no movement): ").strip()) not in ["a", "d", ""]:
             print("Invalid input, please enter 'a' or 'd' or ''")
 
         prompt = get_prompt(state, INPUTS[user_input])
         message = client.messages.create(
-            max_tokens=2048,
-            temperature=args.temperature,
+            max_tokens=1024,
             messages=[{
                 "role": "user",
                 "content": prompt,
             }],
-            model="claude-3-opus-20240229",
+            model="claude-3-5-sonnet-20240620",
         )
 
         response = message.content[0].text
