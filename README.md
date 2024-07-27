@@ -2,6 +2,8 @@
 
 this project experiment with using llm as game engines.
 
+![gif of snake](neural_engine.gif)
+
 ### games
 
 - snake: fully functional
