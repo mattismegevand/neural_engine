@@ -99,9 +99,10 @@ def render(state):
 
 def main():
     parser = argparse.ArgumentParser(description='Snake game engine')
-    parser.add_argument('-v', '--verbose', action=argparse.BooleanOptionalAction, help='Enable verbose mode')
-    parser.add_argument('--llm-render', action=argparse.BooleanOptionalAction, help='Use LLM for rendering')
     parser.add_argument('--clear', action=argparse.BooleanOptionalAction, help='Clear the screen after each frame')
+    parser.add_argument('--llm-render', action=argparse.BooleanOptionalAction, help='Use LLM for rendering')
+    parser.add_argument('--temperature', type=float, default=0.7, help='Temperature of LLM for next state generation')
+    parser.add_argument('-v', '--verbose', action=argparse.BooleanOptionalAction, help='Enable verbose mode')
     args = parser.parse_args()
 
     client = Anthropic()
@@ -130,6 +131,7 @@ def main():
         prompt = get_prompt(state, INPUTS[user_input])
         message = client.messages.create(
             max_tokens=1024,
+            temperature=args.temperature,
             messages=[{
                 "role": "user",
                 "content": prompt,
