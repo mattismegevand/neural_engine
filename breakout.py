@@ -66,15 +66,14 @@ def render(state):
     for brick in state['bricks']:
         x, y = brick['x'], brick['y']
         grid[y][x] = colors[(x + y) % len(colors)]
-    
+
     paddle = state['paddle']
     for x in range(paddle['x'], paddle['x'] + paddle['width']):
         grid[paddle['y']][x] = '▀'
-    
+
     ball = state['ball']
     grid[ball['y']][ball['x']] = '●'
-    
-    # Add direction indicator
+
     dx, dy = ball['dx'], ball['dy']
     indicator_x, indicator_y = ball['x'] + dx, ball['y'] + dy
     if 0 <= indicator_x < WIDTH and 0 <= indicator_y < HEIGHT and grid[indicator_y][indicator_x] == ' ':
@@ -86,7 +85,7 @@ def render(state):
             grid[indicator_y][indicator_x] = '↖'
         else:
             grid[indicator_y][indicator_x] = '↙'
-    
+
     print(f"Score: {state['score']} Lives: {state['lives']}")
     print(f"┌{'─' * WIDTH}┐")
     for row in grid[::-1]:
@@ -120,7 +119,7 @@ Rendered game:"""
 
 def main():
     parser = argparse.ArgumentParser(description='Breakout game engine')
-    parser.add_argument('--clear', action=argparse.BooleanOptionalAction, help='Clear the screen after each frame')
+    parser.add_argument('--clear', action=argparse.BooleanOptionalAction, default=True, help='Clear the screen after each frame')
     parser.add_argument('--llm-render', action=argparse.BooleanOptionalAction, help='Use LLM for rendering')
     parser.add_argument('--temperature', type=float, default=0.7, help='Temperature of LLM for next state generation')
     parser.add_argument('-v', '--verbose', action=argparse.BooleanOptionalAction, help='Enable verbose mode')
@@ -129,7 +128,7 @@ def main():
     client = Anthropic()
     state = {
         "paddle": {"x": 11, "y": 1, "width": 8},
-        "ball": {"x": 15, "y": 13, "dx": 1, "dy": 1},
+        "ball": {"x": 15, "y": 2, "dx": 1, "dy": 1},
         "bricks": [{"x": x, "y": y} for y in range(16, 20) for x in range(0, 30, 2)],
         "score": 0,
         "lives": 3,
@@ -140,7 +139,7 @@ def main():
             os.system('cls' if os.name == 'nt' else 'clear')
         if args.verbose and response:
             print(response + "\n")
-        
+
         if args.llm_render:
             llm_render(client, state)
         else:
